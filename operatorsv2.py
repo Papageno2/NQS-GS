@@ -5,22 +5,11 @@ import numpy as np
 import torch
 from mcmc_sampler_complexv2 import MCsampler
 import multiprocessing
-from nqs_sampler_complexv2 import SampleBuffer
+from nqs_vmcore_complex import SampleBuffer, _get_unique_states
 
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 cpu = torch.device("cpu")
 #------------------------------------------------------------------------
-def _get_unique_states(states, logphis, ustates, ucoeffs):
-    """
-    Returns the unique states, their coefficients and the counts.
-    """
-    states, indices, counts = np.unique(states, return_index=True, return_counts=True, axis=0)
-    logphis = logphis[indices]
-    ustates = ustates[indices]
-    ucoeffs = ucoeffs[indices]
-    return states, logphis, counts, ustates, ucoeffs
-
-
 def _generate_updates(states, operator, single_state_shape, update_size, threads):
     """
     Generates updated states and coefficients for an Operator.
@@ -101,17 +90,16 @@ class cal_op():
             n_updates = uss.shape[1]
             uss = uss.reshape([-1] + self._single_state_shape)
 
-            psi_ops = self._model(torch.from_numpy(uss).float())
+            psi_ops = self._model(uss.float())
             logphi_ops = psi_ops[:,0].reshape(n_sample, n_updates)
             theta_ops = psi_ops[:,1].reshape(n_sample, n_updates)
 
-            psi = self._model(torch.from_numpy(states).float())
+            psi = self._model(states.float())
             logphi = psi[:,0].reshape(len(states),-1)
             theta = psi[:,1].reshape(len(states),-1)
 
             delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape)
             delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape)
-            self._ucs = torch.from_numpy(self._ucs)
             # real part
             Ops_real = torch.sum(ucs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os),1).numpy()
             # imag part

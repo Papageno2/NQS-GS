@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from mcmc_sampler_complexv2 import MCsampler
-from operatorsv2 import _get_unique_states
 from core import mlp_cnn, get_paras_number
 from utils import get_logger
 import time
@@ -15,7 +14,16 @@ import os
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 cpu = torch.device("cpu")
 # ------------------------------------------------------------------------
-
+def _get_unique_states(states, logphis, ustates, ucoeffs):
+    """
+    Returns the unique states, their coefficients and the counts.
+    """
+    states, indices, counts = np.unique(states, return_index=True, return_counts=True, axis=0)
+    logphis = logphis[indices]
+    ustates = ustates[indices]
+    ucoeffs = ucoeffs[indices]
+    return states, logphis, counts, ustates, ucoeffs
+    
 class SampleBuffer:
     def __init__(self, device):
         """
