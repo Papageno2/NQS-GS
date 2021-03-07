@@ -23,7 +23,7 @@ def _get_unique_states(states, logphis, ustates, ucoeffs):
     ustates = ustates[indices]
     ucoeffs = ucoeffs[indices]
     return states, logphis, counts, ustates, ucoeffs
-    
+
 class SampleBuffer:
     def __init__(self, device):
         """
@@ -165,8 +165,8 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
             logphi = psi[:, 0].reshape(len(states), -1)
             theta = psi[:, 1].reshape(len(states), -1)
 
-            delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape).to(gpu)
-            delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape).to(gpu)
+            delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
+            delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
             Es = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1)
 
             return (Es*counts).sum().to(cpu), ((Es**2)*counts).sum().to(cpu)
@@ -201,8 +201,8 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
         theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
 
-        delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape).to(gpu)
-        delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape).to(gpu)
+        delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
+        delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
         ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1).detach()
         ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1).detach()
 

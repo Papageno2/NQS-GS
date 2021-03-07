@@ -32,6 +32,9 @@ parser.add_argument('--layers', type=int, default=2)
 parser.add_argument('--g', type=float, default=1.)
 args = parser.parse_args()
 
+gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+cpu = torch.device("cpu")
+
 state_size = [args.lattice_length, args.lattice_width, args.Dp]
 TolSite = args.lattice_length*args.lattice_width
 Ops_args = dict(hamiltonian=TFIMSpin2D, get_init_state=get_init_state, updator=updator)
@@ -45,7 +48,6 @@ trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_arg
 
 calculate_op = cal_op(state_size=state_size, model=trained_model, n_sample=70000, 
             updator=updator, init_type='ferro', get_init_state=get_init_state, threads=70)
-
 
 sz, stdsz, IntCount = calculate_op.get_value(operator=Sz, op_args=dict(state_size=state_size))
 print([sz/TolSite, stdsz, IntCount])

@@ -98,12 +98,12 @@ class cal_op():
             logphi = psi[:,0].reshape(len(states),-1)
             theta = psi[:,1].reshape(len(states),-1)
 
-            delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape)
-            delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape)
+            delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
+            delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
             # real part
-            Ops_real = torch.sum(ucs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os),1).numpy()
+            Ops_real = torch.sum(ucs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os),1)
             # imag part
-            Ops_imag = torch.sum(ucs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os),1).numpy()
+            Ops_imag = torch.sum(ucs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os),1)
         return ((Ops_real*counts).sum().to(cpu), ((Ops_real**2)*counts).sum().to(cpu), 
                 (Ops_imag*counts).sum().to(cpu), ((Ops_imag**2)*counts).sum().to(cpu))
 
@@ -120,8 +120,11 @@ class cal_op():
         avgOp_real = torch.zeros(sd)
         avgOp2_real = torch.zeros(sd)
         avgOp_imag = torch.zeros(sd)
+
+        self._model = self._model.to(gpu)
         for i in range(sd):    
             avgOp_real[i], avgOp2_real[i], avgOp_imag[i], _ = self._ops(sd)
+        self._model = self._model.to(cpu)
 
         # average over all samples
         AvgOp_real = avgOp_real.sum().numpy()/self._n_sample
