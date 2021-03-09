@@ -4,48 +4,12 @@
 import numpy as np
 import torch
 from mcmc_sampler_complexv2 import MCsampler
-import multiprocessing
-from nqs_vmcore_complex import SampleBuffer, _get_unique_states
+from nqs_vmcore_complex import SampleBuffer
+from utils import _get_unique_states, _generate_updates
 
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 cpu = torch.device("cpu")
 #------------------------------------------------------------------------
-def _generate_updates(states, operator, single_state_shape, update_size, threads):
-    """
-    Generates updated states and coefficients for an Operator.
-
-    Args:
-        states: The states with shape (batch size, shape of state).
-        operator: The operator used for updating the states.
-        state_size: shape of a state in states
-        update_size: number of update_states
-
-    Returns:
-        The updated states and their coefficients. The shape of the updated
-        states is (batch size, num of updates, shape of state), where num of
-        updates is the largest number of updated states among all given states.
-        If a state has fewer updated states, its updates are padded with the
-        original state.
-
-    """
-    n_sample = states.shape[0]
-    ustates = np.zeros([n_sample, update_size] + single_state_shape)
-    ucoeffs = np.zeros([n_sample, update_size])
-
-    pool = multiprocessing.Pool(threads)
-    results = []
-    cnt = 0
-    
-    for state in states:
-        results.append(pool.apply_async(operator.find_states, (state,)))
-    pool.close()
-    pool.join()
-
-    for cnt, res in enumerate(results):
-        ustates[cnt], ucoeffs[cnt] = res.get()
-
-    return ustates, ucoeffs
-
 class cal_op():
     def __init__(self, **kwargs):
         self._state_size = kwargs.get('state_size')

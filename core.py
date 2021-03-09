@@ -167,10 +167,13 @@ if __name__ == '__main__':
     print(get_paras_number(logphi_model))
 
     from tfim_spin2d import get_init_state
-    state0 = get_init_state([10, 10, 2], kind='rand')
+    state0 = get_init_state([10, 10, 2], kind='rand', n_size=10)
     print(state0.shape) 
 
     phi = logphi_model(torch.from_numpy(state0).float())
     print(phi)
     print(phi[:,0])
     print(phi[:,1])
+
+
+   

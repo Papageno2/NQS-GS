@@ -30,6 +30,7 @@ parser.add_argument('--kernels', type=int, default=3)
 parser.add_argument('--filters', type=int, default=4)
 parser.add_argument('--layers', type=int, default=2)
 parser.add_argument('--g', type=float, default=1.)
+parser.add_argument('--wn', type=float, default=10)
 args = parser.parse_args()
 
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,10 +45,11 @@ output_fn ='TFIM_2d'
 
 trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_args, n_sample=args.n_sample, 
         n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, 
-        save_freq=10, dimensions='2d', net_args=net_args, threads=args.threads, output_fn=output_fn)
+        save_freq=10, dimensions='2d', net_args=net_args, threads=args.threads, output_fn=output_fn,
+        target_wn=args.wn)
 
 calculate_op = cal_op(state_size=state_size, model=trained_model, n_sample=70000, 
-            updator=updator, init_type='ferro', get_init_state=get_init_state, threads=70)
+            updator=updator, init_type='ferro', get_init_state=get_init_state, threads=70, sample_division=20)
 
 sz, stdsz, IntCount = calculate_op.get_value(operator=Sz, op_args=dict(state_size=state_size))
 print([sz/TolSite, stdsz, IntCount])

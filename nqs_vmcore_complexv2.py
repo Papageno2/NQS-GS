@@ -35,7 +35,7 @@ class SampleBuffer:
         n_sample = len(self.states)
         devision_len = n_sample // sample_division 
         
-        if n_sample <= batch_size:
+        if n_sample < batch_size:
             batch_size = n_sample
             gpu_states = torch.from_numpy(self.states).to(self._device)
             gpu_counts = torch.from_numpy(self.counts).to(self._device)
@@ -88,7 +88,7 @@ class train_Ops:
 # ------------------------------------------------------------------------
 # main training function
 def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type='rand', n_optimize=10,
-          learning_rate=1E-4, state_size=[10, 2], resample_condition=50, dimensions='1d', batch_size=500,
+          learning_rate=1E-4, state_size=[10, 2], resample_condition=50, dimensions='1d', batch_size=1000,
           sample_division=5, target_wn=10, save_freq=10, net_args=dict(), threads=4, output_fn='test'):
     """
     main training process
@@ -263,7 +263,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         for i in range(sd):    
             avgE[i], avgE2[i] = _energy_ops(sd)
         # ---------------------------------------------------------------------------------------
-        Dloss, WsN = Dloss.to(cpu), WsN.to(cpu)
+        Dloss, WsN = WsN.to(cpu), Dloss.to(cpu)
         logphi_model = logphi_model.to(cpu)
 
         # average over all samples
@@ -272,7 +272,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         StdE = np.sqrt(AvgE2 - AvgE**2)/TolSite
 
         # print training informaition
-        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Dloss: {:.3f}, WsN: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
+        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Dloss {:.3f}, WsN: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
                     format(epoch, AvgE/TolSite, StdE, Dloss, WsN, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
 
         # resample the initial state
