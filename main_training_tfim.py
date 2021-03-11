@@ -7,9 +7,9 @@ from state_flip_updator import updator
 from tfim_spin1d import TFIMSpin1D, get_init_state
 # from state_updator import updator
 # from sun_spin1d import SUNSpin1D, get_init_state
-from nqs_vmc1dcore_complexv3 import train 
+from nqs_vmcore_complex import train 
 from core import mlp_cnn
-from operators import cal_op, Sz, Sx, SzSz
+from operatorsv2 import cal_op, Sz, Sx, SzSz
 import os
 import argparse
 import scipy.io as sio
@@ -31,15 +31,17 @@ parser.add_argument('--layers', type=int, default=2)
 parser.add_argument('--g', type=float, default=1.)
 args = parser.parse_args()
 
+state_size = [args.lattice_size, args.Dp]
 Ops_args = dict(hamiltonian=TFIMSpin1D, get_init_state=get_init_state, updator=updator)
 Ham_args = dict(g=args.g, state_size=state_size, pbc=True)
 net_args = dict(K=args.kernels, F=args.filters, layers=args.layers)
 output_fn ='TFIM_1d'
 
 trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_args, n_sample=args.n_sample, 
-        n_optimize=args.n_optimize, learning_rate=args.lr, state_size=[args.lattice_size, args.Dp], 
-        save_freq=10, net_args=net_args, threads=args.threads, output_fn=output_fn)
+        n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, 
+        save_freq=10, dimensions='1d', net_args=net_args, threads=args.threads, output_fn=output_fn)
 
+'''
 calculate_op = cal_op(state_size=[args.lattice_size, args.Dp], model=trained_model, n_sample=21000, 
             updator=updator, init_type='ferro', get_init_state=get_init_state, threads=70)
 
@@ -84,7 +86,7 @@ def b_check():
     # plt.show()
     
     sio.savemat('test_data.mat',dict(spin_number=spin_number, probs=probs))
-
+'''
 # b_check()
 # phase diagram for g \in [-2,2]
 '''

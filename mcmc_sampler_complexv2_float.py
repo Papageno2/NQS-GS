@@ -53,7 +53,7 @@ class MCsampler():
     def get_single_sample(self, state, logphi_i, mask, rand, update_states, update_coeffs):
         with torch.no_grad():
             state_f = self._updator._get_update(state, mask)
-            psi_f = self._model(torch.from_numpy(state_f[None,...]).double()).numpy()
+            psi_f = self._model(torch.from_numpy(state_f[None,...]).float()).numpy()
             if psi_f.shape[1] == 2: 
                 logphi_f = psi_f[:,0]
             else:
@@ -87,7 +87,7 @@ class MCsampler():
             rands = np.random.rand(n_sample_per_thread)
             
             state = np.squeeze(state0)
-            psi = self._model(torch.from_numpy(state0[None,...]).double()).numpy()
+            psi = self._model(torch.from_numpy(state0[None,...]).float()).numpy()
             if psi.shape[1] == 2: 
                 logphi = psi[:,0]
             else:

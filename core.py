@@ -18,6 +18,13 @@ def get_paras_number(net):
     trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
     return {'Total': total_num, 'Trainable': trainable_num}
 
+def gradient(y, x, grad_outputs=None):
+    """Compute dy/dx @ grad_outputs"""
+    if grad_outputs is None:
+        grad_outputs = torch.ones_like(y)
+    grad = torch.autograd.grad(y, [x], grad_outputs = grad_outputs, create_graph=True)[0]
+    return grad
+
 #----------------------------------------------------------------
 class CNNnet_1d(nn.Module):
     """
@@ -78,7 +85,7 @@ class OutPut1d_layer(nn.Module):
         """
         super(OutPut1d_layer,self).__init__()
         self.K = K
-        self.linear = nn.Linear(F,output_size)
+        self.linear = nn.Linear(F,output_size, bias=False)
     
     def forward(self,x):
         x = periodic_padding(x, self.K, dimensions='1d')
@@ -112,7 +119,7 @@ class OutPut2d_layer(nn.Module):
         """
         super(OutPut2d_layer,self).__init__()
         self.K = [K,K]
-        self.linear = nn.Linear(F,output_size)
+        self.linear = nn.Linear(F,output_size, bias=False)
     
     def forward(self,x):
         x = periodic_padding(x, self.K, dimensions='2d')
@@ -130,13 +137,12 @@ def mlp_cnn(state_size, K, F, layers=2, output_size=1):
         Dp = state_size[-1]
 
         input_layer = CNN1d_layer(Dp, K, F, layer_name='1st')
-        hid_layer = CNN1d_layer(Dp, K, F, layer_name='mid')
         output_layer = OutPut1d_layer(K,F,output_size)
 
         # input layer
         cnn_layers = [input_layer]
         for i in range(1,layers):
-            cnn_layers += [hid_layer]
+            cnn_layers += [CNN1d_layer(Dp, K, F, layer_name='mid')]
         
         cnn_layers += [output_layer]
 
@@ -146,23 +152,22 @@ def mlp_cnn(state_size, K, F, layers=2, output_size=1):
         size of the input state (PBC): (batch size, Dp, Length, Width)
         state size: (Length, Width, Dp)
         """
+    
         Dp = state_size[-1]
         input_layer = CNN2d_layer(Dp, K, F, layer_name='1st')
-        hid_layer = CNN2d_layer(Dp, K, F, layer_name='mid')
         output_layer = OutPut2d_layer(K,F,output_size)
 
         # input layer
         cnn_layers = [input_layer]
         for i in range(1,layers):
-            cnn_layers += [hid_layer]
+            cnn_layers += [CNN2d_layer(Dp, K, F, layer_name='mid')]
         
         cnn_layers += [output_layer]
-
         return nn.Sequential(*cnn_layers)
 
 if __name__ == '__main__':
     # logphi_model = CNNnet_1d(10,2)
-    logphi_model = mlp_cnn([10, 10, 2], 3, 4, output_size=2)
+    logphi_model = mlp_cnn([10, 10, 2], 3, 4, layers=4, output_size=2)
     print(logphi_model)
     print(get_paras_number(logphi_model))
 

@@ -3,11 +3,11 @@
 import numpy as np
 import torch
 import torch.nn as nn 
-from state_flip_updator import updator
-from tfim_spin2d import TFIMSpin2D, get_init_state
+from state_updator import updator
+from HS_spin2d import Heisenberg2DSquare, get_init_state
 # from state_updator import updator
 # from sun_spin1d import SUNSpin1D, get_init_state
-from nqs_vmcore_complexv2 import train 
+from nqs_vmcore_complex import train 
 from core import mlp_cnn
 from operatorsv2 import cal_op, Sz, Sx, SzSz
 import os
@@ -29,7 +29,6 @@ parser.add_argument('--threads', type=int, default=4)
 parser.add_argument('--kernels', type=int, default=3)
 parser.add_argument('--filters', type=int, default=4)
 parser.add_argument('--layers', type=int, default=2)
-parser.add_argument('--g', type=float, default=1.)
 parser.add_argument('--wn', type=float, default=10)
 args = parser.parse_args()
 
@@ -38,10 +37,10 @@ cpu = torch.device("cpu")
 
 state_size = [args.lattice_length, args.lattice_width, args.Dp]
 TolSite = args.lattice_length*args.lattice_width
-Ops_args = dict(hamiltonian=TFIMSpin2D, get_init_state=get_init_state, updator=updator)
-Ham_args = dict(g=args.g, state_size=state_size, pbc=True)
+Ops_args = dict(hamiltonian=Heisenberg2DSquare, get_init_state=get_init_state, updator=updator)
+Ham_args = dict(state_size=state_size, pbc=True)
 net_args = dict(K=args.kernels, F=args.filters, layers=args.layers)
-output_fn ='TFIM_2d'
+output_fn ='HS_2d_square'
 
 trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_args, n_sample=args.n_sample, 
         n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, 
@@ -49,8 +48,8 @@ trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_arg
         target_wn=args.wn)
 
 calculate_op = cal_op(state_size=state_size, model=trained_model, n_sample=70000, 
-            updator=updator, init_type='ferro', get_init_state=get_init_state, threads=70, sample_division=20)
-
+            updator=updator, init_type='rand', get_init_state=get_init_state, threads=70, sample_division=20)
+'''
 sz, stdsz, IntCount = calculate_op.get_value(operator=Sz, op_args=dict(state_size=state_size))
 print([sz/TolSite, stdsz, IntCount])
 
@@ -59,8 +58,8 @@ print([szsz/TolSite, stdsz, IntCount])
 
 sx, stdsx, IntCount = calculate_op.get_value(operator=Sx, op_args=dict(state_size=state_size))
 print([sx/TolSite, stdsx, IntCount])
-
-meane, stde, IntCount = calculate_op.get_value(operator=TFIMSpin2D, op_args=Ham_args)
+'''
+meane, stde, IntCount = calculate_op.get_value(operator=Heisenberg2DSquare, op_args=Ham_args)
 print([meane/TolSite, stde, IntCount])
 
 '''

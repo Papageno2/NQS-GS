@@ -3,5 +3,4 @@ results/*
 *.tif
 *.mat
 loss_funcs.py
-nqs_vmccore_complexv2.py
 test.py

@@ -3,8 +3,8 @@
 
 import numpy as np
 import torch
-from mcmc_sampler_complexv2 import MCsampler
-from nqs_vmcore_complex import SampleBuffer
+from mcmc_sampler_complexv2_float import MCsampler
+from nqs_vmcore_complex_float import SampleBuffer
 from utils import _get_unique_states, _generate_updates
 
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -21,7 +21,8 @@ class cal_op():
             self._single_state_shape = [self._state_size[-1], self._state_size[0], self._state_size[1]]
         self._Dp = self._state_size[-1]
 
-        self._model = kwargs.get('model')
+        self.logphi_model = kwargs.get('logphi_model')
+        self.theta_model = kwargs.get('theta_model')
         self._n_sample = kwargs.get('n_sample')
         self._updator = kwargs.get('updator')
         self._get_init_state = kwargs.get('get_init_state')
@@ -32,7 +33,7 @@ class cal_op():
         self._buff = SampleBuffer(gpu)
         
     def get_sample(self, op):
-        self._sampler = MCsampler(state_size=self._state_size, model=self._model, get_init_state=self._get_init_state, 
+        self._sampler = MCsampler(state_size=self._state_size, model=self.logphi_model, get_init_state=self._get_init_state, 
                 init_type=self._init_type, n_sample=self._n_sample, updator=self._updator, operator=op)
         states, logphis, ustates, ucoeffs = self._sampler.parallel_mh_sampler(self._threads)
         states, logphis, counts, uss, ucs = _get_unique_states(states, logphis, ustates, ucoeffs)
@@ -54,13 +55,11 @@ class cal_op():
             n_updates = uss.shape[1]
             uss = uss.reshape([-1] + self._single_state_shape)
 
-            psi_ops = self._model(uss.double())
-            logphi_ops = psi_ops[:,0].reshape(n_sample, n_updates)
-            theta_ops = psi_ops[:,1].reshape(n_sample, n_updates)
+            logphi_ops = self.logphi_model(uss.float()).reshape(n_sample, n_updates)
+            theta_ops = self.theta_model(uss.float()).reshape(n_sample, n_updates)
 
-            psi = self._model(states.double())
-            logphi = psi[:,0].reshape(len(states),-1)
-            theta = psi[:,1].reshape(len(states),-1)
+            logphi = self.logphi_model(states.float()).reshape(len(states),-1)
+            theta = self.theta_model(states.float()).reshape(len(states),-1)
 
             delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
             delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
@@ -85,10 +84,12 @@ class cal_op():
         avgOp2_real = torch.zeros(sd)
         avgOp_imag = torch.zeros(sd)
 
-        self._model = self._model.to(gpu)
+        self.logphi_model = self.logphi_model.to(gpu)
+        self.theta_model = self.theta_model.to(gpu)
         for i in range(sd):    
             avgOp_real[i], avgOp2_real[i], avgOp_imag[i], _ = self._ops(sd)
-        self._model = self._model.to(cpu)
+        self.logphi_model = self.logphi_model.to(cpu)
+        self.theta_model = self.theta_model.to(gpu)
 
         # average over all samples
         AvgOp_real = avgOp_real.sum().numpy()/self._n_sample

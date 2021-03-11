@@ -1,17 +1,19 @@
 # encoding: utf-8
 # version 1.0 updates: parallel sampling, logger, saves
-# version0 2.0 updates: compatible with 2d system, replay buffer
+# version 2.0 updates: compatible with 2d system, replay buffer
+# version 3.0: double CNN (real and imag), imaginary time propagation
 
 import numpy as np
 import torch
 import torch.nn as nn
 from mcmc_sampler_complexv2 import MCsampler
-from core import mlp_cnn, get_paras_number
+from core import mlp_cnn, get_paras_number, gradient
 from utils import get_logger, _get_unique_states
 import time
 import os
 
-gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+gpu = torch.device("cpu")
 cpu = torch.device("cpu")
 # ------------------------------------------------------------------------
 class SampleBuffer:
@@ -35,8 +37,7 @@ class SampleBuffer:
         n_sample = len(self.states)
         devision_len = n_sample // sample_division 
         
-        if n_sample < batch_size:
-            batch_size = n_sample
+        if n_sample <= batch_size:
             gpu_states = torch.from_numpy(self.states).to(self._device)
             gpu_counts = torch.from_numpy(self.counts).to(self._device)
             gpu_update_states = torch.from_numpy(self.update_states).to(self._device)
@@ -129,6 +130,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     get_init_state = train_ops._get_init_state
     updator = train_ops._updator
     buffer = SampleBuffer(gpu)
+    epsilon = np.min([0.01*learning_rate, 1E-4])
 
     logphi_model = mlp_cnn(state_size=state_size, output_size=2, **net_args)
     logger.info(logphi_model)
@@ -161,83 +163,86 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
 
             return (Es*counts).sum().to(cpu), ((Es**2)*counts).sum().to(cpu)
 
-    # define the loss function according to the energy functional in GPU
-    def compute_loss_energy(data):
-        state, count, op_states = data['state'], data['count'], data['update_states']
-        op_coeffs, logphi0 = data['update_coeffs'], data['logphi0']
+    # setting optimizer in GPU
+    # optimizer = torch.optim.Adam(logphi_model.parameters(), lr=learning_rate)
+    # imaginary time propagation: delta_t = learning_rate
+    def update(IntCount, epsilon):
+        data = buffer.get(batch_size=IntCount)
+        logphi_model.zero_grad()
+
+        state, count, op_states, op_coeffs = data['state'], data['count'], data['update_states'], data['update_coeffs']
 
         psi = logphi_model(state.float())
         logphi = psi[:, 0].reshape(len(state), -1)
         theta = psi[:, 1].reshape(len(state), -1)
 
-        # calculate the weights of the energy from important sampling
-        delta_logphi = logphi - logphi0[..., None]
-
-        # delta_logphi = delta_logphi - delta_logphi.mean()*torch.ones(delta_logphi.shape)
-        delta_logphi = delta_logphi - delta_logphi.mean()
-        weights = count[..., None]*torch.exp(delta_logphi * 2)
-        weights_norm = weights.sum()
-        weights = (weights/weights_norm).detach()
-
-        # calculate the coeffs of the energy
         n_sample = op_states.shape[0]
         n_updates = op_states.shape[1]
-        op_states = op_states.reshape([-1, Dp]+single_state_shape)
+        op_states = op_states.reshape([-1, Dp] + single_state_shape)
         psi_ops = logphi_model(op_states.float())
         logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
         theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
 
         delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
         delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
-        ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1).detach()
-        ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1).detach()
+        ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1)
+        ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1)
+        
+        with torch.no_grad():
+            ops = ops_real.float() + 1j*ops_imag.float() # batch_size
+            mean_e = (ops*count).sum(0)/count.sum()
+        
+        # update parameters with gradient descent
+        for param in logphi_model.parameters():
+            param_len = len(param.data.reshape(-1))
+            Oks = torch.zeros([n_sample, param_len], device=gpu, dtype=torch.cfloat)
+            Oks_conj = torch.zeros([n_sample, param_len], device=gpu, dtype=torch.cfloat)
+            OO_matrix = torch.zeros([n_sample, param_len, param_len], device=gpu, dtype=torch.cfloat)
 
-        # calculate the mean energy
-        mean_energy_real = (weights*ops_real[..., None]).sum().detach()
-        mean_energy_imag = (weights*ops_imag[..., None]).sum().detach()
-
-        loss_e = ((weights*ops_real[..., None]*logphi).sum() - mean_energy_real*(weights*logphi).sum()
-                  + (weights*ops_imag[..., None]*theta).sum() - mean_energy_imag*(weights*theta).sum())
-
-        return loss_e, mean_energy_real, weights_norm/count.sum()
-
-    # setting optimizer in GPU
-    optimizer = torch.optim.Adam(logphi_model.parameters(), lr=learning_rate)
-
-    # off-policy optimization from li yang
-    def update(IntCount):
-        data = buffer.get(batch_size=IntCount)
-        loss_e_old, _, _ = compute_loss_energy(data)
-        # off-policy update
-        mean_e_tol = 0
-        wn_tol = 0
-        es = 0
-        for i in range(n_optimize):
-            optimizer.zero_grad()
-            loss_e, mean_e, wn = compute_loss_energy(data)
-            mean_e_tol += mean_e
-            wn_tol += wn
-
-            if wn > target_wn:
-                logger.warning(
-                    'early stop at step={} as reaching maximal WsN'.format(i))
-                es = 1
-                break
-            loss_e.backward()
-            optimizer.step()
-
-        return loss_e_old-loss_e, wn_tol/(i+1), es
+            # calculate stochastic reconfiguration matrix Skk
+            grad_outputs = torch.zeros_like(logphi)
+            for i in range(n_sample): # for-loop over a batch
+                grad_outputs[i] = 1
+                grads_real = gradient(logphi, param, grad_outputs=grad_outputs).reshape(1, param_len)
+                grads_imag = gradient(theta, param, grad_outputs=grad_outputs).reshape(1, param_len)
+                with torch.no_grad():
+                    Oks[i] = (grads_real + 1j*grads_imag)*count[i]
+                    Oks_conj[i] = (grads_real - 1j*grads_imag)*count[i]
+                    OO_matrix[i] = (Oks_conj[i][..., None]*Oks[i])/count[i]
+                    # test_m = OO_matrix[i]
+                    # test_v = (test_m - test_m.conj().t()).sum()
+                    # print((test_m - test_m.conj().t()).sum())
+                    #if test_v.abs() > 0:
+                    #    print(Oks[i])
+                    #    print(OO_matrix[i])
+            # print(OO_matrix.shape)
+            Skk_matrix = OO_matrix.sum(0)/count.sum() - (Oks_conj.sum(0)[..., None]/count.sum())*(Oks.sum(0)/count.sum()) 
+            # print([OO_matrix.sum(0).shape, ((Oks_conj.sum(0)/count.sum())*(Oks.sum(0).reshape(-1,1)/count.sum())).shape])
+            # calculate Fk
+            Fk = (ops[...,None]*Oks_conj).sum(0)/count.sum() - mean_e*(Oks_conj.sum(0)/count.sum())
+            # calculateprint(Fk.real.float().to(cpu).numpy())
+            Skk_inv = torch.linalg.pinv(Skk_matrix + epsilon*torch.eye(Skk_matrix.shape[0], device=gpu))
+            # print(torch.diag(Skk_matrix))
+            update_k = torch.matmul(Skk_inv, Fk).real
+            update_k = torch.clamp(update_k, min=-1000, max=1000)
+            # print(update_k)
+            # print([ops.shape, (mean_e*(Oks_conj.sum(0).reshape(-1,1)/n_sample)).shape, param_len, param.data.shape, update_k.shape])
+            # update the parameters
+            # x = param.data.clone()
+            # param.data -= learning_rate*Fk.real.float().reshape(param.data.shape)
+            param.data -= learning_rate*update_k.reshape(param.data.shape)
+        
+        return mean_e.real.to(cpu).numpy()
 
     # ----------------------------------------------------------------
     tic = time.time()
     logger.info('Start training:')
     warmup_n_sample = n_sample // 5
-    es_cnt = 0
 
     for epoch in range(epochs):
         sample_tic = time.time()
         MHsampler._n_sample = warmup_n_sample
-        states, logphis, _, update_states, update_coeffs = MHsampler.parallel_mh_sampler(threads)
+        states, logphis, update_states, update_coeffs = MHsampler.parallel_mh_sampler(threads)
         n_sample = MHsampler._n_sample
 
         # using unique states to reduce memory usage.
@@ -253,33 +258,29 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         logphi_model = logphi_model.to(gpu)
         # ------------------------------------------GPU------------------------------------------
         op_tic = time.time()
-        Dloss, WsN, es = update(IntCount)
+        # epsilon_decay = epsilon*(0.9**(epoch//50))
+        mean_e = update(IntCount, epsilon)
+        # logger.info(mean_e.to(cpu).detach().numpy()/TolSite)
         op_toc = time.time()
-        es_cnt += es
-
+        
+        
         sd = 1 if IntCount < batch_size else sample_division
         avgE = torch.zeros(sd)
         avgE2 = torch.zeros(sd)
         for i in range(sd):    
             avgE[i], avgE2[i] = _energy_ops(sd)
         # ---------------------------------------------------------------------------------------
-        Dloss, WsN = WsN.to(cpu), Dloss.to(cpu)
         logphi_model = logphi_model.to(cpu)
 
         # average over all samples
         AvgE = avgE.sum().numpy()/n_sample
         AvgE2 = avgE2.sum().numpy()/n_sample
         StdE = np.sqrt(AvgE2 - AvgE**2)/TolSite
+        Dloss = AvgE - mean_e
 
         # print training informaition
-        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Dloss {:.3f}, WsN: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
-                    format(epoch, AvgE/TolSite, StdE, Dloss, WsN, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
-
-        # resample the initial state
-        if es_cnt > resample_condition:
-            logger.info('resample the initial states')
-            MHsampler.resample_init_states(init_type='ferro', threads=threads)
-            es_cnt = 0
+        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Dloss: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
+                    format(epoch, AvgE/TolSite, StdE, Dloss, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
 
         # save the trained NN parameters
         if epoch % save_freq == 0 or epoch == epochs - 1:
