@@ -28,10 +28,10 @@ class updator():
 
 if __name__ == "__main__":
     from HS_spin2d import get_init_state
-    state0 = get_init_state([4,4,2], kind='rand', n_size=10)
+    state0, _ = get_init_state([4,3,2], kind='rand', n_size=10)
     print(state0[2].shape)
     
-    Update = updator([4,4,2])
+    Update = updator([4,3,2])
     masks = Update.generate_mask(100)
     print(masks[10])
     

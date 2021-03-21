@@ -3,7 +3,7 @@
 from typing import Tuple
 import numpy as np
 
-def get_init_state(state_size,kind='rand', n_size=1):
+def get_init_state(state_size, kind='rand', n_size=1):
     N = state_size[0]
     Dp = state_size[1]
     state = np.zeros([n_size, Dp, N])
@@ -23,11 +23,11 @@ def get_init_state(state_size,kind='rand', n_size=1):
             state[:,0, i] = 1
             state[:,-1, i + N//2] = 1
 
-    return state
+    return state, 0
 
 class SUNSpin1D( ):
 
-    def __init__(self, t: float, pbc: bool) -> None:
+    def __init__(self, state_size, t: float, pbc: bool) -> None:
         """
         Initializes a SU(N) symmetric 1D spin chain Hamiltonian.
 
@@ -41,10 +41,13 @@ class SUNSpin1D( ):
         """
         self._pbc = pbc
         self._t = t
+        self._update_size = state_size[0] + 1
 
     def find_states(self, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        states = []
-        coeffs = []
+        N = state.shape[-1]
+        Dp = state.shape[0]
+        states = np.zeros([self._update_size, Dp, N])
+        coeffs = np.zeros(self._update_size)
         n_sites = state.shape[-1]
         diag = 0.0
         for i in range(n_sites - 1):
@@ -53,8 +56,8 @@ class SUNSpin1D( ):
 
                 # This is the correct way of swapping states when temp.ndim > 1.
                 temp[:,[i, i + 1]] = temp[:,[i + 1, i]]
-                states.append(temp)
-                coeffs.append(-self._t)
+                states[i] = temp
+                coeffs[i] = -self._t
             else:
                 diag += self._t
         if self._pbc:
@@ -64,14 +67,14 @@ class SUNSpin1D( ):
 
                 # This is the correct way of swapping states when temp.ndim > 1.
                 temp[:,[n_sites - 1, 0]] = temp[:,[0, n_sites - 1]]
-                states.append(temp)
-                coeffs.append(-self._t)
+                states[i] = temp
+                coeffs[i] = -self._t
             else:
                 diag += self._t
         # state[:,-1] = state[:,0]
-        states.append(state.copy())
-        coeffs.append(diag)
-        return np.stack(states), np.array(coeffs)
+        states[-1] = state.copy()
+        coeffs[-1] = diag
+        return states, coeffs
 
     def find_states_array(self, states):
         n_states = states.shape[0]

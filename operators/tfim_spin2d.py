@@ -43,9 +43,9 @@ class TFIMSpin2D():
         self._update_size = state_size[0]*state_size[1] + 1
 
     def find_states(self, state: np.ndarray):
-        W = state.shape[-1]
         L = state.shape[-2]
-        Dp = state.shape[-3]
+        W = state.shape[-1]
+        Dp = state.shape[0]
         states = np.zeros([L*W+1, Dp, L, W])
         coeffs = np.zeros(L*W+1)
 

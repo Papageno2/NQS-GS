@@ -3,13 +3,11 @@
 import numpy as np
 import torch
 import torch.nn as nn 
-from state_updator import updator
-from HS_spin2d import Heisenberg2DSquare, get_init_state
-# from state_updator import updator
-# from sun_spin1d import SUNSpin1D, get_init_state
-from nqs_vmcore_complex import train 
+from updators.state_swap_updator import updator
+from operators.HS_spin2d import Heisenberg2DSquare, get_init_state
+from nqs_vmcore_complex_float import train 
 from core import mlp_cnn
-from operatorsv2 import cal_op, Sz, Sx, SzSz
+from operators_float import cal_op, Sz, Sx, SzSz
 import os
 import argparse
 import scipy.io as sio
@@ -30,6 +28,7 @@ parser.add_argument('--kernels', type=int, default=3)
 parser.add_argument('--filters', type=int, default=4)
 parser.add_argument('--layers', type=int, default=2)
 parser.add_argument('--wn', type=float, default=10)
+
 args = parser.parse_args()
 
 gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -43,7 +42,7 @@ net_args = dict(K=args.kernels, F=args.filters, layers=args.layers)
 output_fn ='HS_2d_square'
 
 trained_model, _ = train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_args, n_sample=args.n_sample, 
-        n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, 
+        n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, epsilon=args.epsilon,
         save_freq=10, dimensions='2d', net_args=net_args, threads=args.threads, output_fn=output_fn,
         target_wn=args.wn)
 

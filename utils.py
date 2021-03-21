@@ -4,6 +4,8 @@ import numpy as np
 import multiprocessing
 import logging
 import os
+from torch import nn, Tensor
+from typing import List, Tuple, Dict, Union, Callable
 
 def _get_unique_states(states, logphis, ustates, ucoeffs):
     """
@@ -91,3 +93,89 @@ def decimalToAny(n,x):
     b.reverse()
 
     return b
+
+def _del_nested_attr(obj: nn.Module, names: List[str]) -> None:
+    """
+    Deletes the attribute specified by the given list of names.
+    For example, to delete the attribute obj.conv.weight,
+    use _del_nested_attr(obj, ['conv', 'weight'])
+    """
+    if len(names) == 1:
+        delattr(obj, names[0])
+    else:
+        _del_nested_attr(getattr(obj, names[0]), names[1:])
+
+def _set_nested_attr(obj: nn.Module, names: List[str], value: Tensor) -> None:
+    """
+    Set the attribute specified by the given list of names to value.
+    For example, to set the attribute obj.conv.weight,
+    use _del_nested_attr(obj, ['conv', 'weight'], value)
+    """
+    if len(names) == 1:
+        setattr(obj, names[0], value)
+    else:
+        _set_nested_attr(getattr(obj, names[0]), names[1:], value)
+
+def extract_weights(mod: nn.Module) -> Tuple[Tuple[Tensor, ...], List[str]]:
+    """
+    This function removes all the Parameters from the model and
+    return them as a tuple as well as their original attribute names.
+    The weights must be re-loaded with `load_weights` before the model
+    can be used again.
+    Note that this function modifies the model in place and after this
+    call, mod.parameters() will be empty.
+    """
+    orig_params = tuple(mod.parameters())
+    # Remove all the parameters in the model
+    names = []
+    for name, p in list(mod.named_parameters()):
+        _del_nested_attr(mod, name.split("."))
+        names.append(name)
+
+    # Make params regular Tensors instead of nn.Parameter
+    params = tuple(p.detach().requires_grad_() for p in orig_params)
+    return params, names
+
+def load_weights(mod: nn.Module, names: List[str], params: Tuple[Tensor, ...]) -> None:
+    """
+    Reload a set of weights so that `mod` can be used again to perform a forward pass.
+    Note that the `params` are regular Tensors (that can have history) and so are left
+    as Tensors. This means that mod.parameters() will still be empty after this call.
+    """
+    for name, p in zip(names, params):
+        _set_nested_attr(mod, name.split("."), p)
+
+# conjugate gradient from openai/baseline
+def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
+    """
+    Demmel p 312
+    """
+    p = b.copy()
+    r = b.copy()
+    x = np.zeros_like(b)
+    rdotr = r.dot(r)
+
+    fmtstr =  "%10i %10.3g %10.3g"
+    titlestr =  "%10s %10s %10s"
+    if verbose: print(titlestr % ("iter", "residual norm", "soln norm"))
+
+    for i in range(cg_iters):
+        if callback is not None:
+            callback(x)
+        if verbose: print(fmtstr % (i, rdotr, np.linalg.norm(x)))
+        z = f_Ax(p)
+        v = rdotr / p.dot(z)
+        x += v*p
+        r -= v*z
+        newrdotr = r.dot(r)
+        mu = newrdotr/rdotr
+        p = r + mu*p
+
+        rdotr = newrdotr
+        if rdotr < residual_tol:
+            break
+
+    if callback is not None:
+        callback(x)
+    if verbose: print(fmtstr % (i+1, rdotr, np.linalg.norm(x)))  # pylint: disable=W0631
+    return x

@@ -3,11 +3,9 @@
 import numpy as np
 import torch
 import torch.nn as nn 
-# from state_flip_updator import updator
-# from tfim_spin1d import TFIMSpin1D, get_init_state
 from state_updator import updator
-from sun_spin1d import SUNSpin1D, get_init_state
-from nqs_vmc1dcore_complexv2 import train 
+from operators.sun_spin1d import SUNSpin1D, get_init_state
+from nqs_vmcore_complex_ite import train 
 import os
 import argparse
 
@@ -26,11 +24,14 @@ parser.add_argument('--layers', type=int, default=2)
 parser.add_argument('--g', type=float, default=1.)
 args = parser.parse_args()
 
+state_size = [args.lattice_size, args.Dp]
 Ops_args = dict(hamiltonian=SUNSpin1D, get_init_state=get_init_state, updator=updator)
-Ham_args = dict(t=1, pbc=True)
+Ham_args = dict(state_size=state_size, t=1, pbc=True)
 net_args = dict(K=args.kernels, F=args.filters, layers=args.layers)
+# input_fn = 'SUN_1d/save_model/model_499.pkl'
+input_fn = 0
 output_fn ='SUN_1d'
 
 train(epochs=args.epochs, Ops_args=Ops_args, Ham_args=Ham_args, n_sample=args.n_sample, 
-    n_optimize=args.n_optimize, learning_rate=args.lr, state_size=[args.lattice_size, args.Dp], 
-    save_freq=10, net_args=net_args, threads=args.threads, output_fn=output_fn)
+    n_optimize=args.n_optimize, learning_rate=args.lr, state_size=state_size, 
+    save_freq=10, net_args=net_args, threads=args.threads, input_fn=input_fn, output_fn=output_fn)

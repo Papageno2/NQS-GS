@@ -3,13 +3,11 @@
 import numpy as np
 import torch
 import torch.nn as nn 
-from state_flip_updator import updator
-from tfim_spin1d import TFIMSpin1D, get_init_state
-# from state_updator import updator
-# from sun_spin1d import SUNSpin1D, get_init_state
-from nqs_vmcore_complex import train 
+from updators.state_flip_updator import updator
+from operators.tfim_spin1d import TFIMSpin1D, get_init_state
+from nqs_vmcore_complex_float import train 
 from core import mlp_cnn
-from operatorsv2 import cal_op, Sz, Sx, SzSz
+from operators_float import cal_op, Sz, Sx, SzSz
 import os
 import argparse
 import scipy.io as sio
