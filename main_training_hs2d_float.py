@@ -4,9 +4,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from updators.state_swap_updator import updator
-from operators.HS_spin2d import Heisenberg2DTriangle, get_init_state, value2onehot
-from nqs_vmcore_complex_float import train
-from operatorsv2_float import cal_op, Sz, Sx, SzSz
+from operators.HS_spin2d import Heisenberg2DSquare, get_init_state, value2onehot
+from nqs_vmcore_complexv2_float import train
+from operators_float import cal_op, Sz, Sx, SzSz
 import os
 import argparse
 import scipy.io as sio
@@ -31,21 +31,22 @@ args = parser.parse_args()
 
 state_size = [args.lattice_length, args.lattice_width, args.Dp]
 TolSite = args.lattice_length*args.lattice_width
-Ops_args = dict(hamiltonian=Heisenberg2DTriangle, get_init_state=get_init_state, updator=updator)
+Ops_args = dict(hamiltonian=Heisenberg2DSquare, get_init_state=get_init_state, updator=updator)
 Ham_args = dict(state_size=state_size, pbc=True)
 net_args = dict(K=args.kernels, F=args.filters, layers=args.layers)
 # input_fn = 'HS_2d_tri_L4W2/save_model/model_99.pkl'
 input_fn = 0
-output_fn ='HS_2d_tri_L5W2'
+output_fn ='HS_2d_sq_L4W4_vmc'
 
-trained_logphi_model, state0, _ = train(epochs=args.epochs, Ops_args=Ops_args,
+trained_psi_model, state0, _ = train(epochs=args.epochs, Ops_args=Ops_args,
         Ham_args=Ham_args, n_sample=args.n_sample, n_optimize=args.n_optimize,
         learning_rate=args.lr, state_size=state_size, save_freq=10, dimensions='2d',
-        net_args=net_args, threads=args.threads, input_fn=input_fn, output_fn=output_fn, target_wn=args.wn, sample_division=15)
+        net_args=net_args, threads=args.threads, input_fn=input_fn, 
+        output_fn=output_fn, target_wn=args.wn, sample_division=5)
 # print(state0.shape)
-calculate_op = cal_op(state_size=state_size, logphi_model=trained_logphi_model,
+calculate_op = cal_op(state_size=state_size, psi_model=trained_psi_model,
             state0=state0, n_sample=args.n_sample, updator=updator,
-            get_init_state=get_init_state, threads=args.threads, sample_division=20)
+            get_init_state=get_init_state, threads=args.threads, sample_division=10)
 '''
 sz, stdsz, IntCount = calculate_op.get_value(operator=Sz, op_args=dict(state_size=state_size))
 print([sz/TolSite, stdsz, IntCount])
@@ -56,10 +57,10 @@ print([szsz/TolSite, stdsz, IntCount])
 sx, stdsx, IntCount = calculate_op.get_value(operator=Sx, op_args=dict(state_size=state_size))
 print([sx/TolSite, stdsx, IntCount])
 '''
-meane, stde, IntCount = calculate_op.get_value(operator=Heisenberg2DTriangle, op_args=Ham_args)
+meane, stde, IntCount = calculate_op.get_value(operator=Heisenberg2DSquare, op_args=Ham_args)
 print([meane/TolSite, stde/TolSite, IntCount])
 
-trained_logphi_model.cpu()
+trained_psi_model.cpu()
 # trained_theta_model.cpu()
 def b_check():
     Dp = args.Dp
@@ -86,11 +87,12 @@ def b_check():
     # state_onehots[:,:,-1] = state_onehots[:,:,0]
     # state_onehots = state_onehots[spin_number.argsort(),:,:]
 
-    psi = torch.squeeze(trained_logphi_model(state_onehots.float())).detach().numpy()
-    logphis = psi[:,0]
-    thetas = psi[:,1]
-    # logphis = torch.squeeze(trained_logphi_model(state_onehots.float())).detach().numpy()
-    # thetas = torch.squeeze(trained_theta_model(state_onehots.float())).detach().numpy()
+    #psi = torch.squeeze(trained_logphi_model(state_onehots.float())).detach().numpy()
+    #logphis = psi[:,0]
+    #thetas = psi[:,1]
+    psi = torch.squeeze(trained_psi_model(state_onehots.float())).detach().numpy()
+    logphis = psi.abs()
+    thetas = psi.angle()
     probs = np.exp(logphis*2)/np.sum(np.exp(logphis*2))
     print(np.sum(probs))
 
@@ -98,7 +100,7 @@ def b_check():
     # plt.bar(np.sort(spin_number), np.exp(logphis*2)/np.sum(np.exp(logphis*2)))
     # plt.show()
 
-    sio.savemat('test_data_HS2dtri_L5W2.mat',dict(probs=probs, logphis=logphis, thetas=thetas))
+    sio.savemat('test_data_HS2dsq_L4W4.mat',dict(probs=probs, logphis=logphis, thetas=thetas))
 
 b_check()
 # phase diagram for g \in [-2,2]

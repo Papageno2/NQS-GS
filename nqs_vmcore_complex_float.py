@@ -6,9 +6,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from mcmc_sampler_complexv2_float import MCsampler
+from sampler.mcmc_sampler_complex_float import MCsampler
 from core import mlp_cnn, get_paras_number
 from utils import get_logger, _get_unique_states
+import scipy.io as sio
 import time
 import os
 
@@ -89,7 +90,7 @@ class train_Ops:
 # main training function
 def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type='rand', n_optimize=10,
           learning_rate=1E-4, state_size=[10, 2], dimensions='1d', batch_size=3000,
-          sample_division=5, target_wn=10, save_freq=10, net_args=dict(), threads=4, 
+          sample_division=5, target_wn=2, save_freq=10, net_args=dict(), threads=4, load_state0=True,
           input_fn=0, output_fn='test'):
     """
     main training process
@@ -131,15 +132,10 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     updator = train_ops._updator
     buffer = SampleBuffer(gpu)
 
-    logphi_model = mlp_cnn(state_size=state_size, output_size=1, **net_args).to(gpu)
-    theta_model = mlp_cnn(state_size=state_size, output_size=1, **net_args).to(gpu)
+    logphi_model = mlp_cnn(state_size=state_size, output_size=2,output_activation=True, **net_args).to(gpu)
+    # theta_model = mlp_cnn(state_size=state_size, output_size=1, output_activation=True, **net_args)
     # model for sampling
-    mh_model = mlp_cnn(state_size=state_size, output_size=1, **net_args)
-
-    if input_fn != 0:
-        load_models = torch.load(os.path.join('./results', input_fn))
-        logphi_model.load_state_dict(load_models['logphi_model'])
-        theta_model.load_state_dict(load_models['theta_model']) 
+    mh_model = mlp_cnn(state_size=state_size, output_size=2,output_activation=True, **net_args)
 
     logger.info(logphi_model)
     logger.info(get_paras_number(logphi_model))
@@ -147,6 +143,15 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     MHsampler = MCsampler(state_size=state_size, model=mh_model, init_type=init_type,
                           get_init_state=get_init_state, n_sample=n_sample, threads=threads,
                           updator=updator, operator=_ham)
+    if input_fn != 0:
+        load_model = torch.load(os.path.join('./results', input_fn))
+        logphi_model.load_state_dict(load_model)
+        # theta_model.load_state_dict(load_models['theta_model']) 
+        # fn_name = os.path.split(input_fn)
+        if load_state0:
+            fn_name = os.path.split(os.path.split(input_fn)[0])
+            mat_content = sio.loadmat(os.path.join('./results',fn_name[0], 'state0.mat'))
+            MHsampler._state0 = mat_content['state0']
 
     # mean energy from importance sampling in GPU
     def _energy_ops(sample_division):
@@ -158,11 +163,13 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
             n_updates = op_states.shape[1]
             op_states = op_states.reshape([-1, Dp] + single_state_shape)
 
-            logphi_ops = logphi_model(op_states.float()).reshape(n_sample, n_updates)
-            theta_ops = theta_model(op_states.float()).reshape(n_sample, n_updates)
+            psi_ops = logphi_model(op_states.float())
+            logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
+            theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
 
-            logphi = logphi_model(states.float()).reshape(len(states), -1)
-            theta = theta_model(states.float()).reshape(len(states), -1)
+            psi = logphi_model(states.float())
+            logphi = psi[:, 0].reshape(len(states), -1)
+            theta = psi[:, 1].reshape(len(states), -1)
 
             delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
             delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
@@ -175,8 +182,10 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         state, count, op_states = data['state'], data['count'], data['update_states']
         op_coeffs, logphi0 = data['update_coeffs'], data['logphi0']
 
-        logphi = logphi_model(state.float()).reshape(len(state), -1)
-        theta = theta_model(state.float()).reshape(len(state), -1)
+        psi = logphi_model(state.float())
+        logphi = psi[:, 0].reshape(len(state), -1)
+        theta = psi[:, 1].reshape(len(state), -1)
+        # theta %= 2*np.pi
 
         # calculate the weights of the energy from important sampling
         delta_logphi = logphi - logphi0[..., None]
@@ -191,17 +200,19 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         n_sample = op_states.shape[0]
         n_updates = op_states.shape[1]
         op_states = op_states.reshape([-1, Dp]+single_state_shape)
-        logphi_ops = logphi_model(op_states.float()).reshape(n_sample, n_updates)
-        theta_ops = theta_model(op_states.float()).reshape(n_sample, n_updates)
+        psi_ops = logphi_model(op_states.float())
+        logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
+        theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
+        # theta_ops %= 2*np.pi
 
         delta_logphi_os = logphi_ops - logphi*torch.ones(logphi_ops.shape, device=gpu)
+        delta_logphi_os = torch.clamp(delta_logphi_os, max=12)
         delta_theta_os = theta_ops - theta*torch.ones(theta_ops.shape, device=gpu)
         ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1).detach()
         ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1).detach()
 
         # calculate the mean energy
         mean_energy_real = (weights*ops_real[..., None]).sum().detach()
-        # mean_energy_imag = (weights*ops_imag[..., None]).sum().detach()
 
         loss_e = ((weights*ops_real[..., None]*logphi).sum() - mean_energy_real*(weights*logphi).sum()
                   + (weights*ops_imag[..., None]*theta).sum())
@@ -209,11 +220,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         return loss_e, mean_energy_real, weights_norm/count.sum()
 
     # setting optimizer in GPU
-    # optimizer = torch.optim.Adam(logphi_model.parameters(), lr=learning_rate)
-    optimizer = torch.optim.Adam([{'params': logphi_model.parameters(), 'lr': learning_rate}, 
-	                              {'params': theta_model.parameters(), 'lr': learning_rate}
-	                            ])
-    
+    optimizer = torch.optim.Adam(logphi_model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [200], gamma=0.1)
 
     # off-policy optimization from li yang
@@ -228,7 +235,6 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
             loss_e, mean_e, wn = compute_loss_energy(data)
             mean_e_tol += mean_e
             wn_tol += wn
-
             '''
             if wn > target_wn:
                 logger.warning(
@@ -245,7 +251,6 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     tic = time.time()
     warmup_n_sample = n_sample // 10
     es_cnt = 0
-    Loss_old = 0
     logger.info('mean_spin: {}'.format(MHsampler._state0_v/threads))
     logger.info('Start training:')
 
@@ -254,6 +259,8 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         MHsampler._n_sample = warmup_n_sample
 
         # update the mh_model
+        # if epoch%5 == 0: 
+        #     logger.info('sample network update.')
         MHsampler._model.load_state_dict(logphi_model.state_dict())
 
         states, logphis, update_states, update_coeffs = MHsampler.parallel_mh_sampler()
@@ -269,6 +276,8 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
 
         sample_toc = time.time()
 
+        # logphi_model = logphi_model.to(gpu)
+        # theta_model = theta_model.to(gpu)
         # ------------------------------------------GPU------------------------------------------
         op_tic = time.time()
         Loss, WsN, es = update(IntCount)
@@ -282,34 +291,32 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
             avgE[i], avgE2[i] = _energy_ops(sd)
         # ---------------------------------------------------------------------------------------
         Loss, WsN = Loss.to(cpu), WsN.to(cpu)
+        # logphi_model = logphi_model.to(cpu)
+        # theta_model = theta_model.to(cpu)
 
-        Dloss = Loss - Loss_old
-        Loss_old = Loss
         # average over all samples
         AvgE = avgE.sum().numpy()/n_real_sample
         AvgE2 = avgE2.sum().numpy()/n_real_sample
         StdE = np.sqrt(AvgE2 - AvgE**2)/TolSite
-
+        
         # adjust the learning rate
         scheduler.step()
         lr = scheduler.get_last_lr()[-1]
         # print training informaition
         logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Lr: {:.2f}, WsN: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
                     format(epoch, AvgE/TolSite, StdE, lr/learning_rate, WsN, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
-        
+
         # save the trained NN parameters
         if epoch % save_freq == 0 or epoch == epochs - 1:
             if not os.path.isdir(save_dir):
                 os.makedirs(save_dir)
-            save_model = {'logphi_model': logphi_model.state_dict(),
-                          'theta_model': theta_model.state_dict()}
-            torch.save(save_model, os.path.join(
-                save_dir, 'model_'+str(epoch)+'.pkl'))
+            torch.save(logphi_model.state_dict(), os.path.join(save_dir, 'model_'+str(epoch)+'.pkl'))
+            sio.savemat(os.path.join(output_dir, 'state0.mat'), {'state0': MHsampler._state0})
 
         if warmup_n_sample != n_sample:
-            # first 10 epochs are used to warm up due to the limitations of memory
+            # first 5 epochs are used to warm up due to the limitations of memory
             warmup_n_sample += n_sample // 10
 
     logger.info('Finish training.')
 
-    return logphi_model.to(cpu), theta_model.to(cpu), MHsampler._state0, AvgE
+    return logphi_model.to(cpu), MHsampler._state0, AvgE

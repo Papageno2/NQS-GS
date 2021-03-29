@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sampler.mcmc_sampler_complex_float import MCsampler
-from core import mlp_cnn, get_paras_number
+from core import mlp_cnn_complex, get_paras_number
 from utils import get_logger, _get_unique_states, extract_weights, load_weights
 from torch.autograd.functional import jacobian
 import scipy.io as sio
@@ -136,20 +136,20 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     updator = train_ops._updator
     buffer = SampleBuffer(gpu) 
 
-    logphi_model = mlp_cnn(state_size=state_size, output_size=2, **net_args).to(gpu)
+    psi_model = mlp_cnn_complex(state_size=state_size, bias=False, **net_args).to(gpu)
 
-    mh_model = mlp_cnn(state_size=state_size, output_size=2, **net_args)
-    logger.info(logphi_model)
-    logger.info(get_paras_number(logphi_model))
+    mh_model = mlp_cnn_complex(state_size=state_size, bias=False, **net_args)
+    logger.info(psi_model)
+    logger.info(get_paras_number(psi_model))
     logger.info('epsilion: {}'.format(epsilon))
 
     MHsampler = MCsampler(state_size=state_size, model=mh_model, init_type=init_type,
                           get_init_state=get_init_state, n_sample=n_sample, threads=threads,
-                          updator=updator, operator=_ham)
+                          updator=updator, operator=_ham, complex=True)
 
     if input_fn != 0:
         load_model = torch.load(os.path.join('./results', input_fn))
-        logphi_model.load_state_dict(load_model)
+        psi_model.load_state_dict(load_model) 
         # theta_model.load_state_dict(load_models['theta_model']) 
         if load_state0:
             fn_name = os.path.split(os.path.split(input_fn)[0])
@@ -166,11 +166,13 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
             n_updates = op_states.shape[1]
             op_states = op_states.reshape([-1, Dp] + single_state_shape)
 
-            psi_ops = logphi_model(op_states)
+            # psi_ops = logphi_model(op_states)
+            psi_ops = psi_model(op_states)
             logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
             theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
 
-            psi = logphi_model(states)
+            # psi = logphi_model(states)
+            psi = psi_model(states)
             logphi = psi[:, 0].reshape(len(states), -1)
             theta = psi[:, 1].reshape(len(states), -1)
 
@@ -184,63 +186,66 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     # optimizer = torch.optim.Adam(logphi_model.parameters(), lr=learning_rate)
     # imaginary time propagation: delta_t = learning_rate
     def update_one_step(data, learning_rate, epsilon, n):
-        state, count, logphi0  = data['state'], data['count'], data['logphi0']
+        state, count  = data['state'], data['count']
         op_states, op_coeffs = data['update_states'], data['update_coeffs']
-        psi = logphi_model(state)
+        # psi = logphi_model(state)
+        psi = psi_model(state)
         logphi = psi[:, 0].reshape(len(state), -1)
         theta = psi[:, 1].reshape(len(state), -1)
 
-        # calculate the weights of the energy from important sampling
-        delta_logphi = logphi - logphi0[..., None]
-
-        # delta_logphi = delta_logphi - delta_logphi.mean()*torch.ones(delta_logphi.shape)
-        delta_logphi = delta_logphi - delta_logphi.mean()
-        weights = count[..., None]*torch.exp(delta_logphi * 2)
+        weights = count[..., None]
         weights_norm = weights.sum()
         weights = (weights/weights_norm).detach()
         
-        if weights_norm/count.sum() > target_wn:
-            return weights_norm/count.sum(), 0
-        else:
-            n_sample = op_states.shape[0]
-            n_updates = op_states.shape[1]
-            op_states = op_states.reshape([-1, Dp] + single_state_shape)
-            psi_ops = logphi_model(op_states)
-            logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
-            theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
+        n_sample = op_states.shape[0]
+        n_updates = op_states.shape[1]
+        op_states = op_states.reshape([-1, Dp] + single_state_shape)
+        # psi_ops = logphi_model(op_states)
+        psi_ops = psi_model(op_states)
+        logphi_ops = psi_ops[:, 0].reshape(n_sample, n_updates)
+        theta_ops = psi_ops[:, 1].reshape(n_sample, n_updates)
 
-            delta_logphi_os = logphi_ops - logphi*torch.ones_like(logphi_ops)
-            # delta_logphi_os = torch.clamp(delta_logphi_os, max=5)
-            delta_theta_os = theta_ops - theta*torch.ones_like(theta_ops)
-            ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1)
-            ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1)
-            
-            with torch.no_grad():
-                ops = ops_real + 1j*ops_imag # batch_size
-                mean_e = (ops_real[...,None]*weights).sum(0)
-            # update parameters with gradient descent
-            # copy the model parameters
-            op_logphi_model = copy.deepcopy(logphi_model)
-            params, names = extract_weights(op_logphi_model)
+        delta_logphi_os = logphi_ops - logphi*torch.ones_like(logphi_ops)
+        # delta_logphi_os = torch.clamp(delta_logphi_os, max=5)
+        delta_theta_os = theta_ops - theta*torch.ones_like(theta_ops)
+        ops_real = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.cos(delta_theta_os), 1)
+        ops_imag = torch.sum(op_coeffs*torch.exp(delta_logphi_os)*torch.sin(delta_theta_os), 1)
+        
+        with torch.no_grad():
+            ops = ops_real + 1j*ops_imag # batch_size
+            mean_e = (ops_real[...,None]*weights).sum(0)
+        # update parameters with gradient descent
+        # copy the model parameters
+        op_psi_model = copy.deepcopy(psi_model)
+        params, names = extract_weights(op_psi_model)
 
-            def forward(*new_param):
-                load_weights(op_logphi_model, names, new_param)
-                out = op_logphi_model(state)
-                return out
+        name_num = []
+        for name in names:
+            name_num.append(int(name.split(".")[0]))
+        _, cnts = np.unique(name_num, return_counts=True, axis=0)
+        # net_layers = len(cnts)
 
-            dydws = jacobian(forward, params, vectorize=True) # a tuple contain all grads
-            cnt = 0
-            tic = time.time()
-            for param in logphi_model.parameters():
-                param_len = len(param.data.reshape(-1))
-                dydws_layer = dydws[cnt].reshape(n_sample,2,-1)
+        ws = psi_model.state_dict()
+
+        def forward(*new_param):
+            load_weights(op_psi_model, names, new_param)
+            out = op_psi_model(state)
+            return out
+
+        dpsidws = jacobian(forward, params, vectorize=True) # a tuple contain all grads
+
+        cnt = 0
+        for net_layer in cnts:
+            step = net_layer // 2
+            for i in range(step):
+                index = cnt + i
+                param_len = len(ws[names[index]].reshape(-1))
+                dres_layer = dpsidws[index].reshape(n_sample,2,-1)
+                dims_layer = dpsidws[index + step].reshape(n_sample,2,-1)
                 with torch.no_grad():
-                    grads_real = dydws_layer[:,0,:] # jacobian of d logphi wrt d w
-                    grads_imag = dydws_layer[:,1,:] # jacobian of d theta wrt d w
-                    Oks = grads_real + 1j*grads_imag
-                    Oks_conj = grads_real - 1j*grads_imag
+                    Oks = 0.5*(dres_layer[:,0,:] + dims_layer[:,1,:]) - 0.5*1j*(dims_layer[:,0,:] - dres_layer[:,1,:])
+                    Oks_conj = Oks.conj()
                     OO_matrix = Oks_conj.reshape(n_sample, 1, param_len)*Oks.reshape(n_sample, param_len, 1)
-                
                 
                 Oks = Oks*weights
                 Oks_conj = Oks_conj*weights
@@ -248,32 +253,27 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
                 Skk_matrix = 0.5*(Skk_matrix + Skk_matrix.t().conj()) + epsilon*torch.eye(Skk_matrix.shape[0], device=gpu)
                 # calculate Fk
                 Fk = (ops[...,None]*Oks_conj).sum(0) - mean_e*(Oks_conj).sum(0)
-                # update_k = torch.linalg.solve(Skk_matrix, Fk)
                 update_k, _ = torch.solve(Fk[...,None], Skk_matrix)
-                param.data -= learning_rate*update_k.real.reshape(param.data.shape)
-                cnt += 1
-            t = time.time() - tic
-            return weights_norm/count.sum(), t
+                # real part
+                ws[names[index]] -= learning_rate*update_k.imag.reshape(ws[names[index]].shape)
+                # imag part
+                ws[names[index + step]] += learning_rate*update_k.real.reshape(ws[names[index]].shape)
+            
+            cnt += net_layer
+
+        psi_model.load_state_dict(ws)
+        return 
 
     def update(IntCount, learning_rate, epsilon, epoch):
         data = buffer.get(batch_size=IntCount)
-        wn_tol = 0
-        t = 0
         global_cnt = epoch
-        for i in range(n_optimize):
-            logphi_model.zero_grad()
-            wn, dt = update_one_step(data, learning_rate, epsilon, global_cnt)
-            global_cnt += 1
-            wn_tol += wn
-            t += dt
-
-            if wn > target_wn:
-                logger.warning(
-                    'early stop at step={} as reaching maximal WsN'.format(i))
-                break
-            
+        
+        psi_model.zero_grad()
+        update_one_step(data, learning_rate, epsilon, global_cnt)
+        global_cnt += 1
+          
         # logger.info('jacobian_time: {}'.format(t))
-        return wn_tol/(i+1)
+        return 
 
     # ----------------------------------------------------------------
     tic = time.time()
@@ -285,7 +285,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         sample_tic = time.time()
         MHsampler._n_sample = warmup_n_sample
         # print(logphi_model.state_dict())
-        MHsampler._model.load_state_dict(logphi_model.state_dict())
+        MHsampler._model.load_state_dict(psi_model.state_dict())
         states, logphis, update_states, update_coeffs = MHsampler.parallel_mh_sampler()
         n_real_sample = MHsampler._n_sample
 
@@ -303,7 +303,7 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         # ------------------------------------------GPU------------------------------------------
         op_tic = time.time()
         # epsilon_decay = epsilon*(0.9**(epoch//50))
-        WsN = update(IntCount, learning_rate, epsilon, epoch)
+        update(IntCount, learning_rate, epsilon, epoch)
         # logger.info(mean_e.to(cpu).detach().numpy()/TolSite)
         op_toc = time.time()
         
@@ -321,17 +321,17 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         StdE = np.sqrt(AvgE2 - AvgE**2)/TolSite
 
         # print training informaition
-        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Lr: {:.5f}, Ep: {:.5f}, WsN: {:.3f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
-                    format(epoch, AvgE/TolSite, StdE, learning_rate, epsilon, WsN, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
+        logger.info('Epoch: {}, AvgE: {:.5f}, StdE: {:.5f}, Lr: {:.5f}, Ep: {:.5f}, IntCount: {}, SampleTime: {:.3f}, OptimTime: {:.3f}, TolTime: {:.3f}'.
+                    format(epoch, AvgE/TolSite, StdE, learning_rate, epsilon, IntCount, sample_toc-sample_tic, op_toc-op_tic, time.time()-tic))
 
-        epsilon *= 0.998
+        epsilon *= 1
         # learning_rate *= 0.99
 
         # save the trained NN parameters
         if epoch % save_freq == 0 or epoch == epochs - 1:
             if not os.path.isdir(save_dir):
                 os.makedirs(save_dir)
-            torch.save(logphi_model.state_dict(), os.path.join(save_dir, 'model_'+str(epoch)+'.pkl'))
+            torch.save(psi_model.state_dict(), os.path.join(save_dir, 'model_'+str(epoch)+'.pkl'))
             sio.savemat(os.path.join(output_dir, 'state0.mat'), {'state0': MHsampler._state0})
 
         if warmup_n_sample != n_sample:
@@ -340,4 +340,4 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
 
     logger.info('Finish training.')
 
-    return logphi_model.to(cpu), MHsampler._state0, AvgE
+    return psi_model.to(cpu), MHsampler._state0, AvgE

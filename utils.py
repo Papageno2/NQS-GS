@@ -7,6 +7,69 @@ import os
 from torch import nn, Tensor
 from typing import List, Tuple, Dict, Union, Callable
 
+class SampleBuffer:
+    def __init__(self, device):
+        """
+        A buffer for storing samples from Markov chain sampler, keeping the most
+        probable sample for the next policy update.
+        """
+        self._device = device
+
+    def update(self,states, logphis, counts, update_states, update_coeffs):
+        self.states = states
+        self.logphis = logphis
+        self.counts = counts
+        self.update_states = update_states
+        self.update_coeffs = update_coeffs
+        self._call_time = 0
+        return
+
+    def get(self, batch_size=100, batch_type='rand', sample_division=1):
+        n_sample = len(self.states)
+        devision_len = n_sample // sample_division 
+        
+        if n_sample <= batch_size:
+            gpu_states = torch.from_numpy(self.states).float().to(self._device)
+            gpu_counts = torch.from_numpy(self.counts).float().to(self._device)
+            gpu_update_states = torch.from_numpy(self.update_states).float().to(self._device)
+            gpu_update_coeffs = torch.from_numpy(self.update_coeffs).float().to(self._device)
+            gpu_logphi0 = torch.from_numpy(self.logphis).float().to(self._device)
+        elif batch_type == 'rand':
+            batch_label = np.random.choice(n_sample, batch_size, replace=False)
+            states = self.states[batch_label]
+            logphis = self.logphis[batch_label]
+            counts = self.counts[batch_label]
+            update_states = self.update_states[batch_label]
+            update_coeffs = self.update_coeffs[batch_label]
+
+            gpu_states = torch.from_numpy(states).to(self._device)
+            gpu_counts = torch.from_numpy(counts).to(self._device)
+            gpu_update_states = torch.from_numpy(update_states).to(self._device)
+            gpu_update_coeffs = torch.from_numpy(update_coeffs).to(self._device)
+            gpu_logphi0 = torch.from_numpy(logphis).to(self._device)
+        elif batch_type == 'equal':
+            if self._call_time < sample_division - 1:
+                batch_label = range(self._call_time*devision_len, (self._call_time+1)*devision_len)
+                self._call_time += 1
+            else:
+                batch_label = range(self._call_time*devision_len, n_sample)
+                self._call_time = 0
+            
+            states = self.states[batch_label]
+            logphis = self.logphis[batch_label]
+            counts = self.counts[batch_label]
+            update_states = self.update_states[batch_label]
+            update_coeffs = self.update_coeffs[batch_label]
+
+            gpu_states = torch.from_numpy(states).float().to(self._device)
+            gpu_counts = torch.from_numpy(counts).float().to(self._device)
+            gpu_update_states = torch.from_numpy(update_states).float().to(self._device)
+            gpu_update_coeffs = torch.from_numpy(update_coeffs).float().to(self._device)
+            gpu_logphi0 = torch.from_numpy(logphis).float().to(self._device)
+
+        return dict(state=gpu_states, count=gpu_counts, update_states=gpu_update_states,
+                    update_coeffs=gpu_update_coeffs, logphi0=gpu_logphi0)
+                    
 def _get_unique_states(states, logphis, ustates, ucoeffs):
     """
     Returns the unique states, their coefficients and the counts.
@@ -150,10 +213,10 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
     """
     Demmel p 312
     """
-    p = b.copy()
-    r = b.copy()
-    x = np.zeros_like(b)
-    rdotr = r.dot(r)
+    p = b.clone()
+    r = b.clone()
+    x = torch.zeros_like(b)
+    rdotr = (r*r).sum()
 
     fmtstr =  "%10i %10.3g %10.3g"
     titlestr =  "%10s %10s %10s"
@@ -162,12 +225,12 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
     for i in range(cg_iters):
         if callback is not None:
             callback(x)
-        if verbose: print(fmtstr % (i, rdotr, np.linalg.norm(x)))
+        if verbose: print(fmtstr % (i, rdotr, x.norm()))
         z = f_Ax(p)
-        v = rdotr / p.dot(z)
+        v = rdotr / (p*z).sum()
         x += v*p
         r -= v*z
-        newrdotr = r.dot(r)
+        newrdotr = (r*r).sum()
         mu = newrdotr/rdotr
         p = r + mu*p
 
@@ -177,5 +240,5 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
 
     if callback is not None:
         callback(x)
-    if verbose: print(fmtstr % (i+1, rdotr, np.linalg.norm(x)))  # pylint: disable=W0631
+    if verbose: print(fmtstr % (i+1, rdotr, x.norm()))  # pylint: disable=W0631
     return x
