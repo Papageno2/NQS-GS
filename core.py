@@ -32,6 +32,13 @@ def get_paras_number(net):
     trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
     return {'Total': total_num, 'Trainable': trainable_num}
 
+def gradient(y, x, grad_outputs=None):
+    """compute dy/dx @ grad_outputs"""
+    if grad_outputs is None:
+        grad_outputs = torch.ones_like(y)
+    grad = torch.autograd.grad(y, [x], grad_outputs=grad_outputs, create_graph=True)[0]
+    return grad
+
 #--------------------------------------------------------------------
 class CNN1d_layer(nn.Module):
     def __init__(self,Dp,K,F,layer_name='mid',act=nn.ReLU,pbc=True):
@@ -411,25 +418,36 @@ if __name__ == '__main__':
     print(get_paras_number(logphi_model))
 
     from operators.tfim_spin2d import get_init_state
-    state0 = get_init_state([10,10,2], kind='rand', n_size=10)
+    state0 = get_init_state([10,10,2], kind='rand', n_size=1)
     print(state0.shape) 
 
     phi = logphi_model(torch.from_numpy(state0).float())
-    logphi = phi[:,0].reshape(10,-1)
-    theta = phi[:,1].reshape(10,-1)
+    logphi = phi[:,0].reshape(1,-1)
+    theta = phi[:,1].reshape(1,-1)
     print(phi.shape)
     print(logphi)
 
     op_model.load_state_dict(logphi_model.state_dict())
     phi2 = op_model(torch.from_numpy(state0).float())
-    print(logphi - phi2[:,0].reshape(10,-1))
+    print(logphi - phi2[:,0].reshape(1,-1))
     
 
     # logphi = phi[:,0]
     # logphi.backward()
-    
+    logphi_model.zero_grad()
+    logphi.sum().backward(retain_graph=True)
+    logphi_model.zero_grad()
+    theta.sum().backward(retain_graph=True)
     for name,p in logphi_model.named_parameters():
-        print(name, p.numel())
+        print(name.split(".")[3], p.numel())
+        grads = gradient(theta.sum(), p)
+        print(grads)
+        print(p.grad)
+
+    state0s = np.repeat(state0, 10, axis=0)
+    print(state0s.shape)
+    print(state0s[0] - state0s[1])
+    
     '''
     from utils import extract_weights, load_weights
     import copy

@@ -50,7 +50,8 @@ class MCsampler():
             self._single_state_shape = [Dp, length, width]
         
         self._updator = self._update_operator(self._state_size)
-        self._state0, self._state0_v = self._get_init_state(self._state_size, kind=self._init_type, n_size=self._threads)
+        self.single_state0, self._state0_v = self._get_init_state(self._state_size, kind=self._init_type, n_size=1)
+        self._state0 = self.warmup_sample(n_sample = self._n_sample // 20)
     
     def get_single_sample(self, state, logphi_i, mask, rand, update_states, update_coeffs):
         with torch.no_grad():
@@ -65,6 +66,29 @@ class MCsampler():
                 return state_f, logphi_f, update_states, update_coeffs
             else:
                 return state, logphi_i, update_states, update_coeffs
+    
+    def warmup_sample(self, n_sample):
+        masks = self._updator.generate_mask(n_sample)
+        rands = np.random.rand(n_sample)
+        state0 = self.single_state0
+        with torch.no_grad():
+            psi = self._model(torch.from_numpy(state0[None, ...]).float()).numpy()
+            logphi_i = psi[:,0]
+            state = state0
+
+            cnt = 0
+            while cnt < n_sample:
+                state_f = self._updator._get_update(state, masks[cnt])
+                psi_f = self._model(torch.from_numpy(state_f[None,...]).float()).numpy()
+
+                logphi_f = psi_f[:,0]
+                delta_logphi = logphi_f - logphi_i
+                if delta_logphi>0 or rands[cnt]<=np.exp(delta_logphi*2.0):
+                    state = state_f
+                    logphi_i = logphi_f
+
+                cnt += 1
+        return np.repeat(state, self._threads, axis=0)
 
     def _mh_sampler(self, n_sample_per_thread: int, state0, seed_number):
         """
@@ -135,7 +159,8 @@ class MCsampler():
             cnt += 1
 
         # update the initial sampling state
-        self._state0 = state_list[:,-1,:]
+        self.single_state0 = state_list[-1,-1,:]
+        self._state0 = self.warmup_sample(n_sample = self._n_sample // 20)
         # np.random.shuffle(self._state0)
         
         return (state_list.reshape([self._n_sample] + self._single_state_shape), 

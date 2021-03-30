@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sampler.mcmc_sampler_complex_float import MCsampler
-from core import mlp_cnn_complex, get_paras_number
+from core import mlp_cnn_complex, get_paras_number, gradient
 from utils import get_logger, _get_unique_states
 import scipy.io as sio
 import time
@@ -208,12 +208,41 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
 
         # calculate the mean energy
         mean_energy_real = (weights*ops_real[..., None]).sum().detach()
-        # mean_energy_imag = (weights*ops_imag[..., None]).sum().detach()
 
-        loss_e = ((weights*ops_real[..., None]*logphi).sum() - mean_energy_real*(weights*logphi).sum()
-                  + (weights*ops_imag[..., None]*theta).sum())
+        loss_re = ((weights*ops_real[..., None]*logphi).sum() - mean_energy_real*(weights*logphi).sum()
+                + (weights*ops_imag[..., None]*theta).sum())
 
-        return loss_e, mean_energy_real, weights_norm/count.sum()
+        loss_im = ((weights*ops_real[..., None]*theta).sum() - mean_energy_real*(weights*theta).sum()
+                - (weights*ops_imag[..., None]*logphi).sum())
+
+        return loss_re, loss_im, weights_norm/count.sum()
+
+    def regular_backward(loss_re, loss_im):
+        psi_model.zero_grad()
+        loss_re.backward(retain_graph=True)
+        grads_re = tuple(p.grad.clone() for p in tuple(psi_model.parameters()))
+
+        psi_model.zero_grad()
+        loss_im.backward(retain_graph=True)
+
+        cnt = 0
+        for name, p in psi_model.named_parameters():
+            if name.split(".")[3] == 'conv_re' or name.split(".")[2] == 'linear_re':
+                p.grad = grads_re[cnt]
+            cnt += 1
+            
+        '''
+        psi_model.zero_grad()
+        for name, p in psi_model.named_parameters():
+            if name.split(".")[3] == 'conv_re' or name.split(".")[2] == 'linear_re':
+                grads = gradient(loss_re, p).detach()
+            elif name.split(".")[3] == 'conv_im' or name.split(".")[2] == 'linear_im':
+                grads = gradient(loss_im, p).detach()
+            else:
+                raise ValueError("Missing layer: {}".format(name))
+            p.data -= learning_rate*grads
+        '''
+        return
 
     # setting optimizer in GPU
     optimizer = torch.optim.Adam(psi_model.parameters(), lr=learning_rate)
@@ -224,35 +253,24 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
     def update(batch_size):
         data = buffer.get(batch_size=batch_size)
         # off-policy update
-        mean_e_tol = 0
-        wn_tol = 0
-        es = 0
         for i in range(n_optimize):
             optimizer.zero_grad()
-            loss_e, mean_e, wn = compute_loss_energy(data)
-            mean_e_tol += mean_e
-            wn_tol += wn
+            loss_re, loss_im, wn = compute_loss_energy(data)
 
-            
             if wn > target_wn:
                 logger.warning(
                     'early stop at step={} as reaching maximal WsN'.format(i))
-                es = 1
                 break
-            
-            loss_e.backward()
-            # optimizer.step()
-            # update with GD
-            op_psi_model = copy.deepcopy(psi_model)
-            params, names = extract_weights(op_psi_model)
 
-        return loss_e, wn_tol/(i+1), es
+            regular_backward(loss_re, loss_im)
+            optimizer.step()
+
+        return wn
 
     # ----------------------------------------------------------------
     tic = time.time()
     warmup_n_sample = n_sample // 10
-    es_cnt = 0
-    logger.info('mean_spin: {}'.format(MHsampler._state0_v/threads))
+    logger.info('mean_spin: {}'.format(MHsampler._state0_v))
     logger.info('Start training:')
 
     for epoch in range(epochs):
@@ -279,9 +297,8 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
 
         # ------------------------------------------GPU------------------------------------------
         op_tic = time.time()
-        Loss, WsN, es = update(IntCount)
+        WsN = update(IntCount).cpu()
         op_toc = time.time()
-        es_cnt += es
 
         sd = 1 if IntCount < batch_size else sample_division
         avgE = torch.zeros(sd)
@@ -289,7 +306,6 @@ def train(epochs=100, Ops_args=dict(), Ham_args=dict(), n_sample=100, init_type=
         for i in range(sd):    
             avgE[i], avgE2[i] = _energy_ops(sd)
         # ---------------------------------------------------------------------------------------
-        Loss, WsN = Loss.to(cpu), WsN.to(cpu)
 
         # average over all samples
         AvgE = avgE.sum().numpy()/n_real_sample

@@ -79,8 +79,8 @@ def main(L, W, Dp, ms):
     # return D_sorted[1] - D_sorted[0]
 
 if __name__ == '__main__':
-    L = 4
-    W = 4
+    L = 3
+    W = 3
     ms = 0 if L*W%2 == 0 else -0.5
 
     basis_index, basis_state = create_basis(2,L,W,ms)
